@@ -4,119 +4,89 @@
   const extPct = document.querySelector('[data-ext-pct]');
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // brightness keyframes: target value (0..1) and how long to hold once reached (ms)
-  const sequence = [
-    { v: 0.30, hold: 1200 },
-    { v: 0.68, hold: 1500 },
-    { v: 0.94, hold: 1900 },
-    { v: 0.42, hold: 1500 },
-    { v: 0.16, hold: 1300 },
-    { v: 0.74, hold: 1700 },
-  ];
+  // one full day-night cycle, in ms — slow enough to feel like time passes,
+  // fast enough that visitors see a full loop without scrolling away
+  const PERIOD_MS = 28000;
 
-  // ease curves picked by hand — not `linear`, not `ease`
-  const easeOutQuart = (t) => 1 - Math.pow(1 - t, 4);
+  // brightness shape
+  const FLOOR = 0.06;        // 0% would make both screens disappear into the bezel
+  const SUN_AMP = 0.88;      // peak daylight contribution
+  const MOON_AMP = 0.10;     // moon adds a hint of bias overnight
 
-  const TRANSITION_MS = 1100;   // ms to ease from current to next target
-  const MIRROR_LAG_MS = 340;    // external monitor lags behind built-in (feels like real DDC)
-  const TRAIL_LIMIT   = 720;    // ring buffer for past brightness samples
-
-  let idx = 0;
-  let phase = 'transition';      // 'transition' | 'hold'
-  let phaseStart = performance.now();
-  let from = sequence[sequence.length - 1].v;
-  let to   = sequence[0].v;
-
-  // ring buffer: [{ t, v }, ...] — used to mirror with a real time delay
-  const trail = [];
-
-  function setBuiltin(v) {
-    root.style.setProperty('--brightness-builtin', v.toFixed(3));
-    macPct.textContent = Math.round(v * 100) + '%';
-  }
-  function setExternal(v) {
-    root.style.setProperty('--brightness-external', v.toFixed(3));
-    extPct.textContent = Math.round(v * 100) + '%';
-  }
-
-  function pushSample(t, v) {
-    trail.push({ t, v });
-    if (trail.length > TRAIL_LIMIT) trail.shift();
-  }
-
-  function sampleAt(targetT) {
-    // find the most recent sample at or before targetT
-    if (trail.length === 0) return 0.28;
-    for (let i = trail.length - 1; i >= 0; i--) {
-      if (trail[i].t <= targetT) return trail[i].v;
-    }
-    return trail[0].v;
+  // bell curve with wrap-around (phase is on the unit circle)
+  function bell(phase, center, halfWidth) {
+    let d = Math.abs(phase - center);
+    if (d > 0.5) d = 1 - d;
+    return Math.max(0, 1 - d / halfWidth);
   }
 
   let rafId = null;
+  let startTime = null;
 
-  function tick(now) {
-    const elapsed = now - phaseStart;
-    let v;
+  function update(now) {
+    if (startTime === null) startTime = now;
+    const phase = (((now - startTime) / PERIOD_MS) % 1 + 1) % 1;
 
-    if (phase === 'transition') {
-      const t = Math.min(1, elapsed / TRANSITION_MS);
-      v = from + (to - from) * easeOutQuart(t);
-      if (t >= 1) {
-        phase = 'hold';
-        phaseStart = now;
-        v = to;
-      }
-    } else {
-      v = to;
-      if (elapsed >= sequence[idx].hold) {
-        from = to;
-        idx = (idx + 1) % sequence.length;
-        to = sequence[idx].v;
-        phase = 'transition';
-        phaseStart = now;
-      }
-    }
+    // ----- sun: visible during phase 0.25..0.75 (one half of the cycle) -----
+    const dayAngle = (phase - 0.25) / 0.5;          // 0..1 across the daytime arc
+    const sunUp = dayAngle >= 0 && dayAngle <= 1;
+    const sunArc = sunUp ? Math.sin(dayAngle * Math.PI) : 0;
+    const sunX = sunUp ? dayAngle : 0;
+    const sunY = sunArc;
 
-    setBuiltin(v);
-    pushSample(now, v);
+    // ----- moon: visible during the other half, phase 0.75..1.25 (wrap) -----
+    const moonPhase = (phase - 0.75 + 1) % 1;       // 0..1 across the night arc
+    const moonUp = moonPhase >= 0 && moonPhase <= 1;
+    const moonArc = moonUp ? Math.sin(moonPhase * Math.PI) : 0;
+    const moonX = moonPhase;
+    const moonY = moonArc;
 
-    // mirror: lookup what builtin was MIRROR_LAG_MS ago
-    setExternal(sampleAt(now - MIRROR_LAG_MS));
+    // ----- brightness -----
+    const brightness = Math.min(
+      0.98,
+      FLOOR + sunArc * SUN_AMP + moonArc * MOON_AMP
+    );
 
-    rafId = requestAnimationFrame(tick);
+    // ----- sky layer amounts (crossfade between night → dusk → day → dusk → night) -----
+    const dayAmount = bell(phase, 0.5, 0.30);
+    const duskAmount = Math.max(bell(phase, 0.25, 0.10), bell(phase, 0.75, 0.10));
+    const nightAmount = bell(phase, 0.0, 0.25);
+    const starsAmount = Math.max(0, 1 - sunArc * 1.3 - duskAmount * 0.6);
+
+    root.style.setProperty('--brightness', brightness.toFixed(3));
+    root.style.setProperty('--sun-x', sunX.toFixed(3));
+    root.style.setProperty('--sun-y', sunY.toFixed(3));
+    root.style.setProperty('--sun-vis', sunArc.toFixed(3));
+    root.style.setProperty('--moon-x', moonX.toFixed(3));
+    root.style.setProperty('--moon-y', moonY.toFixed(3));
+    root.style.setProperty('--moon-vis', moonArc.toFixed(3));
+    root.style.setProperty('--day-amount', dayAmount.toFixed(3));
+    root.style.setProperty('--dusk-amount', duskAmount.toFixed(3));
+    root.style.setProperty('--night-amount', nightAmount.toFixed(3));
+    root.style.setProperty('--stars-amount', starsAmount.toFixed(3));
+
+    const pct = Math.round(brightness * 100) + '%';
+    macPct.textContent = pct;
+    extPct.textContent = pct;
+
+    rafId = requestAnimationFrame(update);
   }
 
-  function start() {
-    setBuiltin(0.28);
-    setExternal(0.28);
-    pushSample(performance.now(), 0.28);
-    rafId = requestAnimationFrame(tick);
-  }
-
-  function stop() {
-    if (rafId !== null) cancelAnimationFrame(rafId);
+  function freezeAt(phase) {
+    // single static frame — used for reduced-motion
+    startTime = performance.now() - phase * PERIOD_MS;
+    update(performance.now());
+    cancelAnimationFrame(rafId);
     rafId = null;
   }
 
   if (reduceMotion) {
-    setBuiltin(0.70);
-    setExternal(0.70);
+    freezeAt(0.42); // late morning — clearly daytime, both screens lit
   } else {
-    start();
-    // pause when tab is hidden — saves battery, avoids large catch-up jumps
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        stop();
-      } else if (!rafId) {
-        // reset phase so the loop resumes smoothly instead of fast-forwarding
-        phaseStart = performance.now();
-        rafId = requestAnimationFrame(tick);
-      }
-    });
+    rafId = requestAnimationFrame(update);
   }
 
-  // copy-to-clipboard
+  // ----- copy-to-clipboard -----
   document.querySelectorAll('[data-copy]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const sel = btn.getAttribute('data-copy');
@@ -126,7 +96,6 @@
       try {
         await navigator.clipboard.writeText(text);
       } catch {
-        // fallback for older browsers / file:// origins
         const range = document.createRange();
         range.selectNodeContents(el);
         const sel2 = window.getSelection();

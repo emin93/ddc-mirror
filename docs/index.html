@@ -56,8 +56,23 @@
       <p class="meta">macOS&nbsp;12+ · MIT · ~3&nbsp;MB binary · ~12&nbsp;MB resident · no&nbsp;UI · no&nbsp;telemetry</p>
     </section>
 
-    <section class="stage" aria-label="Animated brightness sync demo">
-      <div class="stage__floor" aria-hidden="true"></div>
+    <section class="stage" aria-label="Day and night brightness cycle demo">
+      <div class="sky" aria-hidden="true">
+        <div class="sky__layer sky__layer--night"></div>
+        <div class="sky__layer sky__layer--dusk"></div>
+        <div class="sky__layer sky__layer--day"></div>
+        <div class="stars"></div>
+        <div class="celestial celestial--moon">
+          <div class="celestial__halo"></div>
+          <div class="celestial__core moon__core"></div>
+        </div>
+        <div class="celestial celestial--sun">
+          <div class="celestial__halo"></div>
+          <div class="celestial__core sun__core"></div>
+        </div>
+      </div>
+
+      <div class="stage__horizon" aria-hidden="true"></div>
 
       <article class="device device--mac" aria-label="Built-in MacBook display">
         <div class="device__chip device__chip--mac">
@@ -74,7 +89,7 @@
               <div class="mac__screen">
                 <div class="wallpaper" aria-hidden="true"></div>
                 <div class="menubar" aria-hidden="true"></div>
-                <div class="dimmer" data-dimmer="builtin" aria-hidden="true"></div>
+                <div class="dimmer" aria-hidden="true"></div>
               </div>
             </div>
           </div>
@@ -83,26 +98,6 @@
           </div>
         </div>
       </article>
-
-      <svg class="signal" viewBox="0 0 400 200" aria-hidden="true" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="sg" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0" stop-color="#f8d97c" stop-opacity="0"/>
-            <stop offset="0.5" stop-color="#f8d97c" stop-opacity="0.7"/>
-            <stop offset="1" stop-color="#f8d97c" stop-opacity="0"/>
-          </linearGradient>
-          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2" result="b"/>
-            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-        </defs>
-        <path id="signal-path" d="M 20 130 Q 200 -10 380 110" fill="none" stroke="url(#sg)" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round"/>
-        <circle r="4" fill="#fff4cf" filter="url(#glow)">
-          <animateMotion dur="2.6s" repeatCount="indefinite" rotate="auto">
-            <mpath href="#signal-path"/>
-          </animateMotion>
-        </circle>
-      </svg>
 
       <article class="device device--ext" aria-label="External monitor">
         <div class="device__chip device__chip--ext">
@@ -113,7 +108,7 @@
           <div class="ext__bezel">
             <div class="ext__screen">
               <div class="wallpaper" aria-hidden="true"></div>
-              <div class="dimmer" data-dimmer="external" aria-hidden="true"></div>
+              <div class="dimmer" aria-hidden="true"></div>
             </div>
             <span class="ext__led" aria-hidden="true"></span>
           </div>
@@ -122,7 +117,7 @@
         </div>
       </article>
 
-      <p class="stage__caption" aria-hidden="true">— made with graduated light —</p>
+      <p class="stage__caption" aria-hidden="true">— one day, ambient-driven —</p>
     </section>
 
     <section class="how">
