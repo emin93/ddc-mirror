@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ddc-mirror — brightness, in sync.</title>
-  <meta name="description" content="A tiny macOS service that mirrors built-in display brightness to external monitors. No UI, no telemetry, no pro tier." />
+  <meta name="description" content="A tiny macOS service that mirrors built-in display brightness to external monitors using native, DDC, or profile-aware dimming. No UI, no telemetry." />
   <meta name="theme-color" content="#0c0d10" />
 
   <meta property="og:title" content="ddc-mirror" />
-  <meta property="og:description" content="Your external display, finally in sync with macOS brightness." />
+  <meta property="og:description" content="Your external display, finally in sync with macOS brightness, using the best available path per monitor." />
   <meta property="og:url" content="https://ddc-mirror.emin.ch" />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://ddc-mirror.emin.ch/assets/banner.png" />
@@ -47,7 +47,8 @@
       <h1>Your external display,<br/><em>finally</em> in sync.</h1>
       <p class="lede">
         When macOS dims your MacBook — manually or via the ambient sensor —
-        <strong>ddc-mirror</strong> applies the same brightness to each external monitor.
+        <strong>ddc-mirror</strong> applies the same brightness to each external monitor,
+        using hardware control when it can and a color-profile-aware fallback when it can't.
         No menu bar. No hotkeys. No telemetry. Just brightness.
       </p>
 
@@ -138,7 +139,7 @@
         <li>
           <span class="how__step">02</span>
           <h3>Picks the best display path</h3>
-          <p>Uses Apple's native brightness API when available, DDC/CI for direct monitors, and software gamma dimming when docks or hubs block DDC.</p>
+          <p>Uses Apple's native brightness API when available, DDC/CI for direct monitors, and profile-aware software dimming when docks or hubs block DDC.</p>
         </li>
         <li>
           <span class="how__step">03</span>

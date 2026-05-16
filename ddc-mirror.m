@@ -59,9 +59,16 @@ typedef enum {
 } BrightnessMode;
 
 typedef struct {
+    uint32_t      sampleCount;
+    CGGammaValue *original[3];
+    CGGammaValue *scaled[3];
+} SoftwareDimTransfer;
+
+typedef struct {
     CGDirectDisplayID id;
     BrightnessMode    mode;
     IOAVServiceRef    av;   // valid only when mode == MODE_DDC
+    SoftwareDimTransfer dim;
 } ExtDisplay;
 
 static CGDirectDisplayID g_builtin   = 0;
@@ -122,28 +129,82 @@ static float softwareDimLevel(float brightness) {
     return fmaxf(clampBrightness(brightness), MIN_SOFTWARE_BRIGHTNESS);
 }
 
-static void softwareDimBrightness(CGDirectDisplayID id, float brightness) {
-    CGSetDisplayTransferByFormula(id,
-        0.0f, brightness, 1.0f,
-        0.0f, brightness, 1.0f,
-        0.0f, brightness, 1.0f);
+static void freeSoftwareDimTransfer(SoftwareDimTransfer *transfer) {
+    for (int i = 0; i < 3; i++) {
+        free(transfer->original[i]);
+        free(transfer->scaled[i]);
+    }
+    memset(transfer, 0, sizeof(*transfer));
+}
+
+static bool captureSoftwareDimTransfer(CGDirectDisplayID id,
+                                       SoftwareDimTransfer *transfer) {
+    memset(transfer, 0, sizeof(*transfer));
+
+    uint32_t capacity = CGDisplayGammaTableCapacity(id);
+    if (capacity == 0) return false;
+
+    for (int i = 0; i < 3; i++) {
+        transfer->original[i] = calloc(capacity, sizeof(CGGammaValue));
+        transfer->scaled[i] = calloc(capacity, sizeof(CGGammaValue));
+        if (!transfer->original[i] || !transfer->scaled[i]) {
+            freeSoftwareDimTransfer(transfer);
+            return false;
+        }
+    }
+
+    uint32_t sampleCount = 0;
+    CGError err = CGGetDisplayTransferByTable(id, capacity,
+                                              transfer->original[0],
+                                              transfer->original[1],
+                                              transfer->original[2],
+                                              &sampleCount);
+    if (err != kCGErrorSuccess || sampleCount == 0) {
+        freeSoftwareDimTransfer(transfer);
+        return false;
+    }
+
+    transfer->sampleCount = sampleCount;
+    return true;
+}
+
+static bool softwareDimBrightness(ExtDisplay *display, float dimLevel) {
+    SoftwareDimTransfer *transfer = &display->dim;
+    if (transfer->sampleCount == 0) return false;
+
+    for (uint32_t i = 0; i < transfer->sampleCount; i++) {
+        for (int channel = 0; channel < 3; channel++) {
+            transfer->scaled[channel][i] = transfer->original[channel][i] * dimLevel;
+        }
+    }
+
+    CGError err = CGSetDisplayTransferByTable(display->id,
+                                              transfer->sampleCount,
+                                              transfer->scaled[0],
+                                              transfer->scaled[1],
+                                              transfer->scaled[2]);
+    if (err != kCGErrorSuccess) {
+        NSLog(@"ddc-mirror: software dim failed for display %u (%d)",
+              display->id, err);
+        return false;
+    }
+    return true;
 }
 
 static bool setSoftwareDimBrightnessAll(float brightness) {
-    float b = softwareDimLevel(brightness);
+    float dimLevel = softwareDimLevel(brightness);
     bool applied = false;
 
     for (int i = 0; i < g_extCount; i++) {
-        ExtDisplay d = g_externals[i];
-        if (d.mode != MODE_SOFTWARE_DIM) continue;
+        ExtDisplay *d = &g_externals[i];
+        if (d->mode != MODE_SOFTWARE_DIM) continue;
 
-        softwareDimBrightness(d.id, b);
-        applied = true;
+        applied = softwareDimBrightness(d, dimLevel) || applied;
     }
 
     if (applied) {
         g_softwareDimApplied = true;
-        g_softwareDimCurrent = b;
+        g_softwareDimCurrent = dimLevel;
     }
     return applied;
 }
@@ -265,8 +326,27 @@ static void releaseDisplayMap(void) {
     for (int i = 0; i < g_extCount; i++) {
         if (g_externals[i].av) CFRelease(g_externals[i].av);
         g_externals[i].av = NULL;
+        freeSoftwareDimTransfer(&g_externals[i].dim);
     }
     g_extCount = 0;
+}
+
+static void restoreSoftwareDimIfApplied(void) {
+    if (!g_softwareDimApplied) return;
+
+    for (int i = 0; i < g_extCount; i++) {
+        ExtDisplay *d = &g_externals[i];
+        SoftwareDimTransfer *transfer = &d->dim;
+        if (d->mode != MODE_SOFTWARE_DIM || transfer->sampleCount == 0) continue;
+
+        CGSetDisplayTransferByTable(d->id,
+                                    transfer->sampleCount,
+                                    transfer->original[0],
+                                    transfer->original[1],
+                                    transfer->original[2]);
+    }
+    g_softwareDimApplied = false;
+    g_softwareDimCurrent = -1.0f;
 }
 
 static void addExternal(CGDirectDisplayID id, BrightnessMode mode, IOAVServiceRef av) {
@@ -275,7 +355,13 @@ static void addExternal(CGDirectDisplayID id, BrightnessMode mode, IOAVServiceRe
         return;
     }
 
-    g_externals[g_extCount++] = (ExtDisplay){ .id = id, .mode = mode, .av = av };
+    ExtDisplay display = { .id = id, .mode = mode, .av = av };
+    if (mode == MODE_SOFTWARE_DIM && !captureSoftwareDimTransfer(id, &display.dim)) {
+        NSLog(@"ddc-mirror: display %u - software-dim unavailable", id);
+        return;
+    }
+
+    g_externals[g_extCount++] = display;
 
     const char *name = mode == MODE_APPLE_NATIVE ? "Apple-native" :
                        mode == MODE_DDC ? "DDC" : "software-dim";
@@ -288,6 +374,7 @@ static float builtinBrightnessOrDefault(float fallback) {
 }
 
 static void buildDisplayMap(void) {
+    restoreSoftwareDimIfApplied();
     releaseDisplayMap();
     g_builtin = 0;
 
@@ -447,9 +534,7 @@ static void onSystemPower(void *refcon, io_service_t service,
 
 static void quit(int code) {
     cancelSoftwareDimAnimation();
-    if (g_softwareDimApplied) {
-        CGDisplayRestoreColorSyncSettings();
-    }
+    restoreSoftwareDimIfApplied();
     releaseDisplayMap();
     exit(code);
 }
@@ -471,7 +556,7 @@ static void printUsage(void) {
           "external displays. Per display, picks one of:\n"
           "  - Apple-native API (Studio Display, Pro Display XDR)\n"
           "  - DDC/CI VCP 0x10 (Apple Silicon, monitors on direct cables)\n"
-          "  - Software gamma dim (Intel, or monitors behind docks/hubs)\n"
+          "  - Profile-aware software dim (Intel, or monitors behind docks/hubs)\n"
           "No flags, no config.\n", stdout);
 }
 

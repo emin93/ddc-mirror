@@ -20,7 +20,7 @@
 
 A tiny macOS LaunchAgent that watches your **built-in display's brightness** and mirrors it to **every external monitor** you have plugged in.
 
-When macOS dims your MacBook (manually, or automatically via the ambient light sensor), `ddc-mirror` syncs the same brightness to all your externals. It picks the best mechanism per display automatically: DDC/CI for monitors on a direct cable, software gamma dimming for monitors behind a dock or hub that strips DDC, and Apple's native API for Studio/Pro Display XDR.
+When macOS dims your MacBook (manually, or automatically via the ambient light sensor), `ddc-mirror` syncs the same brightness to all your externals. It picks the best mechanism per display automatically: Apple's native API for Studio/Pro Display XDR, DDC/CI for monitors on a direct cable, and profile-aware software dimming for monitors behind docks or hubs that strip DDC.
 
 ## 🚀 Install &amp; forget
 
@@ -52,13 +52,13 @@ On startup, each external monitor is probed once and routed to the best availabl
 
 - 🍎 &nbsp;**Apple-native API** &mdash; for Studio Display &amp; Pro Display XDR.
 - 🔌 &nbsp;**DDC/CI** &mdash; `IOAVServiceWriteI2C` VCP `0x10`, for monitors on a direct cable (Apple Silicon).
-- 🌗 &nbsp;**Software gamma dimming** &mdash; `CGSetDisplayTransferByFormula`, fallback for everything else: Intel Macs, monitors behind docks, hubs, or KVMs that strip DDC.
+- 🌗 &nbsp;**Profile-aware software dimming** &mdash; captures each display's existing ColorSync transfer table, then scales that table with `CGSetDisplayTransferByTable` when hardware brightness is unavailable.
 
 Each brightness change is debounced (~80 ms) and fanned out to every display.
 
 ### 🔁 &nbsp;3. Stay in sync, always
 
-Re-enumerates displays on hot-plug (`CGDisplayRegisterReconfigurationCallback`) and on wake (`IORegisterForSystemPower`). Restores factory gamma on exit. Survives reboots via `brew services`.
+Re-enumerates displays on hot-plug (`CGDisplayRegisterReconfigurationCallback`) and on wake (`IORegisterForSystemPower`). Restores ColorSync settings on exit. Survives reboots via `brew services`.
 
 ## 🛠️ Development
 
@@ -67,7 +67,7 @@ make
 ./ddc-mirror
 ```
 
-The whole thing is one `.m` file and a Makefile. No SwiftPM, no dependencies. Builds on Apple Silicon and Intel; on Intel, the DDC code path compiles out and every external falls back to software gamma dim.
+The whole thing is one `.m` file and a Makefile. No SwiftPM, no dependencies. Builds on Apple Silicon and Intel; on Intel, the DDC code path compiles out and every external falls back to profile-aware software dimming.
 
 ## 📜 License
 
