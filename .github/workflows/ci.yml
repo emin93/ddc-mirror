@@ -5,9 +5,11 @@ on:
   pull_request:
 
 jobs:
-  test:
+  build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Test
-        run: swift test
+      - name: Build
+        run: make
+      - name: Smoke test
+        run: ./ddc-mirror --help

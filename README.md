@@ -7,6 +7,7 @@
 <img src="docs/assets/banner.png" alt="ddc-mirror — brightness, in sync." width="100%" />
 
 [![macOS](https://img.shields.io/badge/macOS-12%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-only-000?logo=apple&logoColor=white)](#)
 [![License: MIT](https://img.shields.io/badge/license-MIT-ffd166)](LICENSE)
 [![Free Forever](https://img.shields.io/badge/💛-free%20forever-ff9f6b)](#)
 [![Zero Config](https://img.shields.io/badge/⚙️-zero%20config-6ee7a7)](#)
@@ -19,9 +20,9 @@
 
 ## 🪄 What is it?
 
-A tiny macOS LaunchAgent that watches your **built-in display's brightness** and mirrors it to **every external monitor** you have plugged in &mdash; over DDC/CI.
+A tiny macOS LaunchAgent that watches your **built-in display's brightness** and mirrors it to **every external monitor** you have plugged in.
 
-When macOS dims your MacBook (manually, or automatically via the ambient light sensor), `ddc-mirror` writes the same brightness percentage to all your external displays. So your whole desk dims and brightens together, the way it always should have.
+When macOS dims your MacBook (manually, or automatically via the ambient light sensor), `ddc-mirror` syncs the same brightness to all your externals. It picks the best mechanism per display automatically: DDC/CI for monitors on a direct cable, software gamma dimming for monitors behind a dock or hub that strips DDC, and Apple's native API for Studio/Pro Display XDR.
 
 ## 🚀 Install &amp; forget
 
@@ -45,22 +46,18 @@ That's it. There is no step two.
 
 | | |
 | :-: | :-- |
-| **01** | Watches the built-in display's brightness via Apple's native `DisplayServices` stack &mdash; the same signal macOS uses for its brightness HUD. |
-| **02** | On every change, writes the matching brightness over DDC/CI to all connected external monitors (`m1ddc` on Apple Silicon, `ddcctl` as a fallback). |
-| **03** | Runs as a `brew services` LaunchAgent. Survives reboots. Rediscovers displays automatically when they connect or disconnect. |
+| **01** | Subscribes to Apple's private `DisplayServices` brightness-change push notification &mdash; the same signal that drives the macOS brightness HUD. No polling. |
+| **02** | On each change (debounced 80&nbsp;ms), pushes the new value to every external display. For each one it auto-picks the right mechanism at startup: **Apple-native API** for Studio/Pro Display XDR, **DDC/CI** (`IOAVServiceWriteI2C` VCP `0x10`) for monitors on direct cables, and **software gamma dimming** (`CGSetDisplayTransferByFormula`) for monitors behind docks/hubs/KVMs that strip DDC. |
+| **03** | Re-enumerates displays on hot-plug (`CGDisplayRegisterReconfigurationCallback`) and on wake (`IORegisterForSystemPower`). Restores factory gamma on exit. Survives reboots via `brew services`. |
 
 ## 🛠️ Development
 
 ```sh
-swift build
-swift run ddc-mirror
+make
+./ddc-mirror
 ```
 
-Want to see what it would write, without touching any displays?
-
-```sh
-swift run ddc-mirror --backend print --once --verbose
-```
+The whole thing is one `.m` file (~300 lines) and a Makefile. No SwiftPM, no dependencies. Apple Silicon only.
 
 ## 📜 License
 
