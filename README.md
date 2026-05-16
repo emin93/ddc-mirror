@@ -68,6 +68,9 @@ Options can be passed as CLI flags or environment variables:
 | `--max 100` | `DDC_MIRROR_MAX` | `100` |
 | `--verbose` | `DDC_MIRROR_VERBOSE=1` | off |
 
+The Homebrew service also reads `~/.config/ddc-mirror/config` using the same
+`KEY=value` names. Set `DDC_MIRROR_CONFIG` to point at a different file.
+
 ## Scope
 
 This intentionally does not add controls to macOS Displays settings, does not intercept keyboard events, and does not provide a menu bar app. It only mirrors the built-in display brightness while the built-in display is active.
