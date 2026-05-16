@@ -15,15 +15,12 @@ Minimal macOS LaunchAgent that mirrors the built-in display brightness to extern
 
 ## Install
 
-For the current source checkout:
-
 ```sh
-brew install m1ddc
-brew install --HEAD ./packaging/homebrew/ddc-mirror.rb
+brew install emin93/tap/ddc-mirror
 brew services start ddc-mirror
 ```
 
-Or build directly:
+For development, build directly:
 
 ```sh
 swift build -c release
