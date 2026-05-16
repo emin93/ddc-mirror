@@ -57,7 +57,7 @@ make
 ./ddc-mirror
 ```
 
-The whole thing is one `.m` file (~300 lines) and a Makefile. No SwiftPM, no dependencies. Apple Silicon only.
+The whole thing is one `.m` file and a Makefile. No SwiftPM, no dependencies. Apple Silicon only.
 
 ## 📜 License
 

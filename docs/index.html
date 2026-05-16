@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ddc-mirror — brightness, in sync.</title>
-  <meta name="description" content="A tiny macOS service that mirrors your built-in display brightness to external DDC/CI monitors. No UI, no telemetry, no pro tier." />
+  <meta name="description" content="A tiny macOS service that mirrors built-in display brightness to external monitors. No UI, no telemetry, no pro tier." />
   <meta name="theme-color" content="#0c0d10" />
 
   <meta property="og:title" content="ddc-mirror" />
@@ -47,7 +47,7 @@
       <h1>Your external display,<br/><em>finally</em> in sync.</h1>
       <p class="lede">
         When macOS dims your MacBook — manually or via the ambient sensor —
-        <strong>ddc-mirror</strong> writes the same brightness to your external monitor over DDC/CI.
+        <strong>ddc-mirror</strong> applies the same brightness to each external monitor.
         No menu bar. No hotkeys. No telemetry. Just brightness.
       </p>
 
@@ -108,7 +108,7 @@
 
       <article class="device device--ext" aria-label="External monitor">
         <div class="device__chip device__chip--ext">
-          <span class="device__chip-label">external · DDC/CI</span>
+          <span class="device__chip-label">external</span>
           <span class="device__chip-value" data-ext-pct>28%</span>
         </div>
         <div class="ext">
@@ -137,8 +137,8 @@
         </li>
         <li>
           <span class="how__step">02</span>
-          <h3>Speaks DDC/CI over USB-C</h3>
-          <p>Hands the value to <code>m1ddc</code> on Apple Silicon (or <code>ddcctl</code> as a fallback) to write the matching brightness percentage to every DDC-capable monitor.</p>
+          <h3>Picks the best display path</h3>
+          <p>Uses Apple's native brightness API when available, DDC/CI for direct monitors, and software gamma dimming when docks or hubs block DDC.</p>
         </li>
         <li>
           <span class="how__step">03</span>
@@ -164,8 +164,8 @@
 brew install emin93/tap/ddc-mirror
 brew services start ddc-mirror
 
-<span class="c-comment"># or dry-run, once, with output</span>
-ddc-mirror --backend print --once --verbose</code></pre>
+<span class="c-comment"># or run directly</span>
+ddc-mirror</code></pre>
       <p class="quickstart__note">The eventual command is <code>brew install ddc-mirror</code> once it lands in homebrew-core. Until then, the personal tap above is the working incantation.</p>
     </section>
   </main>

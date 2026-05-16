@@ -1,20 +1,4 @@
-//
-// ddc-mirror.m
-//
-// Mirror the built-in MacBook display's brightness to all connected
-// external displays. Apple Silicon only.
-//
-// Per-display strategy, picked at startup and on every hot-plug / wake:
-//   1. Apple-native externals (Studio Display, Pro Display XDR)
-//        → DisplayServicesSetBrightness   (real backlight)
-//   2. DDC-capable externals (most monitors on direct USB-C/DP cables)
-//        → IOAVServiceWriteI2C VCP 0x10   (real backlight)
-//   3. DDC-rejecting externals (most monitors via USB-C dock / KVM / HDMI hub)
-//        → CGSetDisplayTransferByFormula  (software gamma scaling)
-//
-// Build:  make
-// Run:    ./ddc-mirror
-//
+// Mirror the built-in MacBook display brightness to all external displays.
 
 @import Foundation;
 @import IOKit;
@@ -26,16 +10,10 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
-
-// ---------------------------------------------------------------------------
-// Private framework symbols.
-// DisplayServices: linked via -F PrivateFrameworks -framework DisplayServices.
-// IOAVService:     re-exported by IOKit on macOS 12+.
-// CoreDisplay_*:   re-exported by CoreDisplay.
-// ---------------------------------------------------------------------------
 
 typedef CFTypeRef IOAVServiceRef;
 
@@ -57,11 +35,12 @@ extern int  DisplayServicesUnregisterForBrightnessChangeNotifications(
 
 extern CFDictionaryRef CoreDisplay_DisplayCreateInfoDictionary(CGDirectDisplayID display);
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 #define MAX_DISPLAYS 16
+#define DDC_BRIGHTNESS_VCP 0x10
+#define DDC_WRITE_RETRIES 3
+#define DDC_WRITE_DELAY_US 50000
+#define BRIGHTNESS_EPSILON 0.005f
+#define MIN_SOFTWARE_BRIGHTNESS 0.05f
 
 typedef enum {
     MODE_APPLE_NATIVE,
@@ -81,6 +60,7 @@ static int               g_extCount  = 0;
 
 static dispatch_source_t g_debounce;
 static dispatch_queue_t  g_writeQueue;
+static dispatch_source_t g_signalSources[3];
 static float             g_pending     = -1.0f;
 static float             g_lastWritten = -1.0f;
 
@@ -91,48 +71,56 @@ static io_object_t           g_pmNotifier = MACH_PORT_NULL;
 static int  g_rebootstrapGen     = 0;
 static bool g_softwareDimApplied = false;
 
-// ---------------------------------------------------------------------------
-// DDC/CI write — VCP code 0x10 (luminance/brightness)
-// Returns the IOReturn of the LAST write attempt.
-// ---------------------------------------------------------------------------
+static float clampBrightness(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
 
-static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value /* 0..100 */) {
-    uint8_t pkt[6];
+static uint8_t ddcBrightness(float value) {
+    return (uint8_t)(clampBrightness(value) * 100.0f + 0.5f);
+}
+
+static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value) {
+    uint8_t pkt[6] = {0};
     pkt[0] = 0x84;
     pkt[1] = 0x03;
-    pkt[2] = 0x10;
-    pkt[3] = 0x00;
+    pkt[2] = DDC_BRIGHTNESS_VCP;
     pkt[4] = value;
     pkt[5] = 0x6E ^ 0x51 ^ pkt[0] ^ pkt[1] ^ pkt[2] ^ pkt[3] ^ pkt[4];
 
     IOReturn last = KERN_SUCCESS;
-    for (int i = 0; i < 3; i++) {
-        usleep(50000);  // 50 ms — many monitors drop the first write
+    for (int i = 0; i < DDC_WRITE_RETRIES; i++) {
+        usleep(DDC_WRITE_DELAY_US);
         last = IOAVServiceWriteI2C(av, 0x37, 0x51, pkt, sizeof(pkt));
         if (last == KERN_SUCCESS) break;
     }
     return last;
 }
 
-// ---------------------------------------------------------------------------
-// Software dim via gamma-curve scaling. Works through any cable / dock / KVM
-// because it's applied in the WindowServer before pixels hit the wire.
-// ---------------------------------------------------------------------------
-
 static void softwareDimBrightness(CGDirectDisplayID id, float brightness) {
-    // Linear scale: out = in * brightness, gamma = 1.0
-    // brightness=1.0 → no dimming, brightness=0.0 → black
-    float b = brightness < 0.05f ? 0.05f : brightness;  // never go fully black
+    float b = fmaxf(clampBrightness(brightness), MIN_SOFTWARE_BRIGHTNESS);
     CGSetDisplayTransferByFormula(id,
         0.0f, b, 1.0f,
         0.0f, b, 1.0f,
         0.0f, b, 1.0f);
-    g_softwareDimApplied = true;
 }
 
-// ---------------------------------------------------------------------------
-// IORegistry walk: CGDirectDisplayID → DCPAVServiceProxy (Location=External)
-// ---------------------------------------------------------------------------
+static bool isExternalAVService(io_service_t service) {
+    io_name_t name;
+    if (IORegistryEntryGetName(service, name) != KERN_SUCCESS ||
+        strcmp(name, "DCPAVServiceProxy") != 0) {
+        return false;
+    }
+
+    CFTypeRef loc = IORegistryEntryCreateCFProperty(service, CFSTR("Location"),
+                                                     kCFAllocatorDefault, 0);
+    bool external = loc &&
+                    CFGetTypeID(loc) == CFStringGetTypeID() &&
+                    CFStringCompare((CFStringRef)loc, CFSTR("External"), 0) == kCFCompareEqualTo;
+    if (loc) CFRelease(loc);
+    return external;
+}
 
 static IOAVServiceRef avServiceForDisplay(CGDirectDisplayID displayID) {
     CFDictionaryRef info = CoreDisplay_DisplayCreateInfoDictionary(displayID);
@@ -144,59 +132,36 @@ static IOAVServiceRef avServiceForDisplay(CGDirectDisplayID displayID) {
         return NULL;
     }
 
-    char ioLocationCStr[1024] = {0};
-    Boolean ok = CFStringGetCString(ioLocation, ioLocationCStr, sizeof(ioLocationCStr),
+    io_string_t path;
+    Boolean ok = CFStringGetCString(ioLocation, path, sizeof(path),
                                     kCFStringEncodingUTF8);
     CFRelease(info);
     if (!ok) return NULL;
 
+    io_registry_entry_t display = IORegistryEntryFromPath(kIOMainPortDefault, path);
+    if (display == MACH_PORT_NULL) return NULL;
+
     io_iterator_t iter = MACH_PORT_NULL;
-    if (IORegistryEntryCreateIterator(IORegistryGetRootEntry(kIOMainPortDefault),
-                                       kIOServicePlane,
-                                       kIORegistryIterateRecursively,
-                                       &iter) != KERN_SUCCESS) {
+    if (IORegistryEntryCreateIterator(display, kIOServicePlane,
+                                      kIORegistryIterateRecursively, &iter) != KERN_SUCCESS) {
+        IOObjectRelease(display);
         return NULL;
     }
 
     IOAVServiceRef found = NULL;
-    bool inDisplaySubtree = false;
     io_service_t s;
     while ((s = IOIteratorNext(iter)) != MACH_PORT_NULL) {
-        if (!inDisplaySubtree) {
-            io_string_t path;
-            if (IORegistryEntryGetPath(s, kIOServicePlane, path) == KERN_SUCCESS &&
-                strcmp(path, ioLocationCStr) == 0) {
-                inDisplaySubtree = true;
-            }
+        if (isExternalAVService(s)) {
+            found = IOAVServiceCreateWithService(kCFAllocatorDefault, s);
             IOObjectRelease(s);
-            continue;
-        }
-
-        io_name_t name;
-        if (IORegistryEntryGetName(s, name) == KERN_SUCCESS &&
-            strcmp(name, "DCPAVServiceProxy") == 0) {
-            CFTypeRef loc = IORegistryEntryCreateCFProperty(s, CFSTR("Location"),
-                                                             kCFAllocatorDefault, 0);
-            bool external = loc &&
-                            CFGetTypeID(loc) == CFStringGetTypeID() &&
-                            CFStringCompare((CFStringRef)loc, CFSTR("External"), 0) == kCFCompareEqualTo;
-            if (loc) CFRelease(loc);
-            if (external) {
-                found = IOAVServiceCreateWithService(kCFAllocatorDefault, s);
-                IOObjectRelease(s);
-                break;
-            }
+            break;
         }
         IOObjectRelease(s);
     }
     IOObjectRelease(iter);
+    IOObjectRelease(display);
     return found;
 }
-
-// ---------------------------------------------------------------------------
-// Build / tear down the external display map. Probes each external once to
-// pick the right strategy.
-// ---------------------------------------------------------------------------
 
 static void releaseDisplayMap(void) {
     for (int i = 0; i < g_extCount; i++) {
@@ -204,6 +169,24 @@ static void releaseDisplayMap(void) {
         g_externals[i].av = NULL;
     }
     g_extCount = 0;
+}
+
+static void addExternal(CGDirectDisplayID id, BrightnessMode mode, IOAVServiceRef av) {
+    if (g_extCount >= MAX_DISPLAYS) {
+        if (av) CFRelease(av);
+        return;
+    }
+
+    g_externals[g_extCount++] = (ExtDisplay){ .id = id, .mode = mode, .av = av };
+
+    const char *name = mode == MODE_APPLE_NATIVE ? "Apple-native" :
+                       mode == MODE_DDC ? "DDC" : "software-dim";
+    NSLog(@"ddc-mirror: display %u - %s", id, name);
+}
+
+static float builtinBrightnessOrDefault(float fallback) {
+    float b = 0.0f;
+    return g_builtin && DisplayServicesGetBrightness(g_builtin, &b) == 0 ? b : fallback;
 }
 
 static void buildDisplayMap(void) {
@@ -218,84 +201,53 @@ static void buildDisplayMap(void) {
         return;
     }
 
-    // Read current built-in brightness once for the DDC probe value
-    float currentBrightness = 0.5f;
-    {
-        float b = 0;
-        for (uint32_t i = 0; i < count; i++) {
-            if (CGDisplayIsBuiltin(ids[i]) && DisplayServicesGetBrightness(ids[i], &b) == 0) {
-                currentBrightness = b;
-                break;
-            }
+    for (uint32_t i = 0; i < count; i++) {
+        if (CGDisplayIsBuiltin(ids[i])) {
+            g_builtin = ids[i];
+            break;
         }
     }
 
+    uint8_t probeBrightness = ddcBrightness(builtinBrightnessOrDefault(0.5f));
     for (uint32_t i = 0; i < count; i++) {
         CGDirectDisplayID id = ids[i];
-        if (CGDisplayIsBuiltin(id)) {
-            g_builtin = id;
-            continue;
-        }
+        if (CGDisplayIsBuiltin(id)) continue;
         if (CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay) continue;
-        if (g_extCount >= MAX_DISPLAYS) break;
 
-        ExtDisplay *d = &g_externals[g_extCount];
-        d->id = id;
-        d->av = NULL;
-
-        // 1. Apple-native?
         float probe = 0;
         if (DisplayServicesGetBrightness(id, &probe) == 0) {
-            d->mode = MODE_APPLE_NATIVE;
-            g_extCount++;
-            NSLog(@"ddc-mirror: display %u — Apple-native", id);
+            addExternal(id, MODE_APPLE_NATIVE, NULL);
             continue;
         }
 
-        // 2. DDC-capable? Probe with a write of the current built-in brightness.
         IOAVServiceRef av = avServiceForDisplay(id);
         if (av) {
-            uint8_t v = (uint8_t)(currentBrightness * 100.0f + 0.5f);
-            if (v > 100) v = 100;
-            if (ddcWriteBrightness(av, v) == KERN_SUCCESS) {
-                d->mode = MODE_DDC;
-                d->av = av;
-                g_extCount++;
-                NSLog(@"ddc-mirror: display %u — DDC", id);
+            if (ddcWriteBrightness(av, probeBrightness) == KERN_SUCCESS) {
+                addExternal(id, MODE_DDC, av);
                 continue;
             }
             CFRelease(av);
         }
 
-        // 3. Software dim fallback.
-        d->mode = MODE_SOFTWARE_DIM;
-        g_extCount++;
-        NSLog(@"ddc-mirror: display %u — software-dim (DDC not reachable)", id);
+        addExternal(id, MODE_SOFTWARE_DIM, NULL);
     }
 
     NSLog(@"ddc-mirror: builtin=%u, externals=%d", g_builtin, g_extCount);
 }
 
-// ---------------------------------------------------------------------------
-// Apply pending brightness to all externals
-// ---------------------------------------------------------------------------
-
 static void flushBrightness(void) {
     if (g_pending < 0) return;
-    if (fabsf(g_pending - g_lastWritten) < 0.005f) return;
+    if (fabsf(g_pending - g_lastWritten) < BRIGHTNESS_EPSILON) return;
     g_lastWritten = g_pending;
 
-    float clamped = g_pending;
-    if (clamped < 0) clamped = 0;
-    if (clamped > 1) clamped = 1;
-    uint8_t ddcVal = (uint8_t)(clamped * 100.0f + 0.5f);
+    float b = clampBrightness(g_pending);
+    uint8_t ddcVal = ddcBrightness(b);
 
     for (int i = 0; i < g_extCount; i++) {
         ExtDisplay d = g_externals[i];
         switch (d.mode) {
             case MODE_APPLE_NATIVE: {
                 CGDirectDisplayID id = d.id;
-                float b = clamped;
                 dispatch_async(g_writeQueue, ^{
                     DisplayServicesSetBrightness(id, b);
                 });
@@ -315,7 +267,7 @@ static void flushBrightness(void) {
             }
             case MODE_SOFTWARE_DIM: {
                 CGDirectDisplayID id = d.id;
-                float b = clamped;
+                g_softwareDimApplied = true;
                 dispatch_async(g_writeQueue, ^{
                     softwareDimBrightness(id, b);
                 });
@@ -324,10 +276,6 @@ static void flushBrightness(void) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Brightness change callback
-// ---------------------------------------------------------------------------
 
 static void onBrightnessChanged(CFNotificationCenterRef center,
                                 void *observer,
@@ -339,8 +287,7 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
     if (v) {
         g_pending = v.floatValue;
     } else {
-        float b = 0;
-        if (DisplayServicesGetBrightness(g_builtin, &b) == 0) g_pending = b;
+        g_pending = builtinBrightnessOrDefault(g_pending);
     }
     dispatch_source_set_timer(g_debounce,
         dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC),
@@ -348,11 +295,13 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
         5 * NSEC_PER_MSEC);
 }
 
-// ---------------------------------------------------------------------------
-// Re-bootstrap (after hot-plug or wake)
-// ---------------------------------------------------------------------------
+static void syncNow(void) {
+    g_pending = builtinBrightnessOrDefault(g_pending);
+    g_lastWritten = -1.0f;
+    flushBrightness();
+}
 
-static void doRebootstrap(void) {
+static void rebootstrap(void) {
     if (g_builtin) {
         DisplayServicesUnregisterForBrightnessChangeNotifications(g_builtin, g_builtin);
     }
@@ -363,12 +312,7 @@ static void doRebootstrap(void) {
     }
     DisplayServicesRegisterForBrightnessChangeNotifications(g_builtin, g_builtin,
                                                              onBrightnessChanged);
-    float b = 0;
-    if (DisplayServicesGetBrightness(g_builtin, &b) == 0) {
-        g_pending = b;
-        g_lastWritten = -1.0f;
-        flushBrightness();
-    }
+    syncNow();
 }
 
 static void scheduleRebootstrap(double delaySeconds) {
@@ -376,13 +320,9 @@ static void scheduleRebootstrap(double delaySeconds) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delaySeconds * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (my != g_rebootstrapGen) return;
-        doRebootstrap();
+        rebootstrap();
     });
 }
-
-// ---------------------------------------------------------------------------
-// Display reconfiguration (hot-plug, mode change)
-// ---------------------------------------------------------------------------
 
 static void onDisplayReconfigured(CGDirectDisplayID display,
                                   CGDisplayChangeSummaryFlags flags,
@@ -394,10 +334,6 @@ static void onDisplayReconfigured(CGDirectDisplayID display,
     }
     scheduleRebootstrap(1.0);
 }
-
-// ---------------------------------------------------------------------------
-// Sleep / wake
-// ---------------------------------------------------------------------------
 
 static void onSystemPower(void *refcon, io_service_t service,
                           natural_t messageType, void *messageArgument) {
@@ -414,21 +350,23 @@ static void onSystemPower(void *refcon, io_service_t service,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Clean-up on signal: restore factory gamma so software-dimmed displays
-// don't stay dimmed after we exit.
-// ---------------------------------------------------------------------------
-
-static void onSignal(int sig) {
+static void quit(int code) {
     if (g_softwareDimApplied) {
         CGDisplayRestoreColorSyncSettings();
     }
-    _exit(sig == SIGTERM || sig == SIGINT ? 0 : 1);
+    releaseDisplayMap();
+    exit(code);
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+static void watchSignal(int sig, size_t index) {
+    signal(sig, SIG_IGN);
+    g_signalSources[index] = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, sig, 0,
+                                                    dispatch_get_main_queue());
+    dispatch_source_set_event_handler(g_signalSources[index], ^{
+        quit(sig == SIGHUP ? 1 : 0);
+    });
+    dispatch_resume(g_signalSources[index]);
+}
 
 static void printUsage(void) {
     fputs("Usage: ddc-mirror\n"
@@ -455,12 +393,11 @@ int main(int argc, const char *argv[]) {
         return 1;
 #endif
 
-        signal(SIGTERM, onSignal);
-        signal(SIGINT,  onSignal);
-        signal(SIGHUP,  onSignal);
+        watchSignal(SIGTERM, 0);
+        watchSignal(SIGINT,  1);
+        watchSignal(SIGHUP,  2);
 
-        g_writeQueue = dispatch_queue_create("ch.emin.ddc-mirror.write",
-                                             DISPATCH_QUEUE_CONCURRENT);
+        g_writeQueue = dispatch_queue_create("ch.emin.ddc-mirror.write", NULL);
 
         g_debounce = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                             dispatch_get_main_queue());
@@ -490,13 +427,7 @@ int main(int argc, const char *argv[]) {
                                kCFRunLoopDefaultMode);
         }
 
-        // Initial sync
-        float b = 0;
-        if (DisplayServicesGetBrightness(g_builtin, &b) == 0) {
-            g_pending = b;
-            g_lastWritten = -1.0f;
-            flushBrightness();
-        }
+        syncNow();
 
         CFRunLoopRun();
     }

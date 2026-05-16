@@ -1,5 +1,5 @@
 class DdcMirror < Formula
-  desc "Sync built-in MacBook brightness to all external displays via DDC/CI"
+  desc "Sync built-in MacBook brightness to external displays"
   homepage "https://ddc-mirror.emin.ch"
   url "https://github.com/emin93/ddc-mirror/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
