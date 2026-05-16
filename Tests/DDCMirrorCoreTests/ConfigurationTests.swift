@@ -36,4 +36,13 @@ final class ConfigurationTests: XCTestCase {
 
         XCTAssertEqual(configuration.displayTargets, ["1", "2"])
     }
+
+    func testParsesBetterDisplayBackend() throws {
+        let configuration = try Configuration.parse(
+            arguments: ["ddc-mirror", "--backend", "betterdisplay"],
+            environment: [:]
+        )
+
+        XCTAssertEqual(configuration.backend, .betterdisplay)
+    }
 }

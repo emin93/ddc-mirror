@@ -12,6 +12,7 @@ Minimal macOS LaunchAgent that mirrors the built-in display brightness to extern
 - One backend:
   - `m1ddc` for Apple Silicon Macs using USB-C/DisplayPort Alt Mode
   - `ddcctl` as a fallback backend
+  - `betterdisplaycli` as a compatibility fallback for setups where open-source DDC backends cannot communicate with the display
 
 ## Install
 
@@ -59,7 +60,7 @@ Options can be passed as CLI flags or environment variables:
 
 | Option | Environment | Default |
 | --- | --- | --- |
-| `--backend auto|m1ddc|ddcctl|print` | `DDC_MIRROR_BACKEND` | `auto` |
+| `--backend auto|m1ddc|ddcctl|betterdisplay|print` | `DDC_MIRROR_BACKEND` | `auto` |
 | `--displays 1,2` | `DDC_MIRROR_DISPLAYS` | unset |
 | `--interval 0.5` | `DDC_MIRROR_INTERVAL` | `0.5` |
 | `--min-delta 0.01` | `DDC_MIRROR_MIN_DELTA` | `0.01` |

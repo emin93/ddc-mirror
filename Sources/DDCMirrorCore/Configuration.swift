@@ -4,6 +4,7 @@ public enum BackendPreference: String, Sendable {
     case automatic = "auto"
     case m1ddc
     case ddcctl
+    case betterdisplay
     case print
 }
 
@@ -105,7 +106,7 @@ public struct Configuration: Sendable {
     Mirrors the active built-in display brightness to external DDC/CI monitors.
 
     Options:
-      --backend auto|m1ddc|ddcctl|print  DDC backend to use (default: auto)
+      --backend auto|m1ddc|ddcctl|betterdisplay|print  DDC backend to use (default: auto)
       --display ID                       Target display ID for the backend; repeatable
       --displays ID,ID                   Comma-separated target display IDs
       --interval SECONDS                 Poll interval (default: 0.5)
