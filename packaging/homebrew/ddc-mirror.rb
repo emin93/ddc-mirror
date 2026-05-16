@@ -1,12 +1,16 @@
+# typed: strict
+# frozen_string_literal: true
+
+# Formula for ddc-mirror.
 class DdcMirror < Formula
   desc "Mirror built-in display brightness to external DDC/CI monitors"
   homepage "https://github.com/emin93/ddc-mirror"
   license "MIT"
   head "https://github.com/emin93/ddc-mirror.git", branch: "main"
 
-  depends_on :macos
   depends_on xcode: ["15.0", :build]
   depends_on "m1ddc"
+  depends_on :macos
 
   def install
     system "swift", "build", "-c", "release", "--disable-sandbox"
