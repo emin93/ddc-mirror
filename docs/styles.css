@@ -10,12 +10,6 @@
   --accent-soft: #d9b864;
 
   --brightness: 0.28;
-  --sun-x: 0.5;
-  --sun-y: 0;
-  --sun-vis: 0;
-  --moon-x: 0.5;
-  --moon-y: 0;
-  --moon-vis: 0;
   --day-amount: 0;
   --dusk-amount: 0;
   --night-amount: 1;
@@ -215,6 +209,7 @@ main {
 .sky__layer {
   position: absolute;
   inset: 0;
+  will-change: opacity;
 }
 .sky__layer--night {
   background:
@@ -224,19 +219,19 @@ main {
 }
 .sky__layer--dusk {
   background:
-    radial-gradient(70% 55% at calc(var(--sun-x, 0.5) * 100%) calc(85% - var(--sun-y, 0) * 65%),
-      rgba(255, 160, 80, 0.65) 0%,
-      rgba(220, 90, 130, 0.35) 35%,
+    radial-gradient(80% 55% at 50% 100%,
+      rgba(255, 160, 80, 0.55) 0%,
+      rgba(220, 90, 130, 0.28) 35%,
       transparent 70%),
     linear-gradient(180deg, #1a1238 0%, #4a2358 45%, #c2624a 85%, #f4a868 100%);
   opacity: var(--dusk-amount, 0);
 }
 .sky__layer--day {
   background:
-    radial-gradient(55% 55% at calc(var(--sun-x, 0.5) * 100%) calc(85% - var(--sun-y, 0) * 70%),
-      rgba(255, 248, 220, 0.55) 0%,
-      rgba(255, 220, 160, 0.18) 40%,
-      transparent 70%),
+    radial-gradient(65% 55% at 50% 30%,
+      rgba(255, 248, 220, 0.40) 0%,
+      rgba(255, 220, 160, 0.12) 45%,
+      transparent 75%),
     linear-gradient(180deg, #2c6da0 0%, #5a9cc8 35%, #a8cde6 75%, #d8e6ec 100%);
   opacity: var(--day-amount, 0);
 }
@@ -261,16 +256,22 @@ main {
     radial-gradient(1.1px 1.1px at 96% 14%, #ffffffbb, transparent 60%);
   opacity: var(--stars-amount, 0);
   pointer-events: none;
+  will-change: opacity;
 }
 
-/* ---- celestial bodies (sun + moon) ---- */
+/* ---- celestial body (sun) ----
+   Positioned at 0,0; moved each frame by JS via translate3d so the GPU
+   composites the transform without paint/layout invalidation. */
 .celestial {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 64px;
   height: 64px;
-  transform: translate(-50%, -50%);
+  margin: -32px 0 0 -32px;
   pointer-events: none;
-  will-change: top, left, opacity;
+  will-change: transform, opacity;
+  transform: translate3d(-9999px, -9999px, 0);
 }
 .celestial__core {
   position: absolute;
@@ -279,20 +280,9 @@ main {
 }
 .celestial__halo {
   position: absolute;
-  inset: -180%;
+  inset: -150%;
   border-radius: 50%;
   pointer-events: none;
-  filter: blur(6px);
-}
-.celestial--sun {
-  left: calc(var(--sun-x, 0.5) * 100%);
-  top: calc(85% - var(--sun-y, 0) * 70%);
-  opacity: var(--sun-vis, 0);
-}
-.celestial--moon {
-  left: calc(var(--moon-x, 0.5) * 100%);
-  top: calc(85% - var(--moon-y, 0) * 70%);
-  opacity: var(--moon-vis, 0);
 }
 .sun__core {
   background: radial-gradient(circle at 50% 45%,
@@ -304,27 +294,10 @@ main {
 }
 .celestial--sun .celestial__halo {
   background: radial-gradient(circle,
-    rgba(255, 220, 140, 0.50) 0%,
-    rgba(255, 180, 100, 0.18) 30%,
-    rgba(255, 140, 80, 0.06) 50%,
+    rgba(255, 220, 140, 0.40) 0%,
+    rgba(255, 180, 100, 0.14) 30%,
+    rgba(255, 140, 80, 0.05) 50%,
     transparent 65%);
-}
-.moon__core {
-  background:
-    radial-gradient(circle at 32% 38%, transparent 6%, rgba(0,0,0,0.10) 8%, transparent 12%),
-    radial-gradient(circle at 60% 58%, transparent 4%, rgba(0,0,0,0.08) 6%, transparent 9%),
-    radial-gradient(circle at 70% 28%, transparent 3%, rgba(0,0,0,0.07) 5%, transparent 7%),
-    radial-gradient(circle at 45% 45%,
-      #fafaf2 0%,
-      #e0e0d2 55%,
-      #9c9c8e 100%);
-  box-shadow: 0 0 16px rgba(220, 220, 200, 0.4);
-}
-.celestial--moon .celestial__halo {
-  background: radial-gradient(circle,
-    rgba(210, 220, 240, 0.32) 0%,
-    rgba(180, 200, 230, 0.10) 35%,
-    transparent 60%);
 }
 
 /* horizon line floats in front of sky, behind devices */
@@ -351,9 +324,7 @@ main {
   align-items: baseline;
   gap: 10px;
   font-family: var(--mono);
-  background: rgba(21, 23, 28, 0.85);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(15, 17, 22, 0.92);
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 6px 14px;
@@ -384,7 +355,6 @@ main {
   max-width: 380px;
   margin-left: auto;
   margin-right: 20px;
-  filter: drop-shadow(0 22px 50px rgba(0,0,0,0.6));
 }
 .mac__lid {
   position: relative;
@@ -393,6 +363,7 @@ main {
   border-radius: 12px 12px 3px 3px;
   border: 1px solid #2e3138;
   border-bottom: none;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.6);
 }
 .mac__bezel {
   position: relative;
@@ -462,7 +433,6 @@ main {
   position: relative;
   width: 100%;
   max-width: 620px;
-  filter: drop-shadow(0 32px 70px rgba(0,0,0,0.65));
 }
 .ext__bezel {
   position: relative;
@@ -470,6 +440,7 @@ main {
   padding: 13px 13px 16px;
   border-radius: 14px;
   border: 1px solid #2e3138;
+  box-shadow: 0 32px 70px rgba(0, 0, 0, 0.65);
 }
 .ext__screen {
   position: relative;
@@ -532,6 +503,7 @@ main {
   pointer-events: none;
   z-index: 2;
   opacity: calc(1 - var(--brightness) * 0.92);
+  will-change: opacity;
 }
 
 .stage__caption {
