@@ -49,6 +49,8 @@ extern CFDictionaryRef CoreDisplay_DisplayCreateInfoDictionary(CGDirectDisplayID
 #define DDC_WRITE_DELAY_US 50000
 #define BRIGHTNESS_EPSILON 0.005f
 #define MIN_SOFTWARE_BRIGHTNESS 0.05f
+#define SOFTWARE_DIM_ANIMATION_SECONDS 0.18
+#define SOFTWARE_DIM_FRAME_INTERVAL_US 16667
 
 typedef enum {
     MODE_APPLE_NATIVE,
@@ -67,16 +69,19 @@ static ExtDisplay        g_externals[MAX_DISPLAYS];
 static int               g_extCount  = 0;
 
 static dispatch_source_t g_debounce;
+static dispatch_source_t g_softwareDimTimer;
 static dispatch_queue_t  g_writeQueue;
 static dispatch_source_t g_signalSources[3];
 static float             g_pending     = -1.0f;
-static float             g_lastWritten = -1.0f;
+static float             g_lastHardwareWritten = -1.0f;
+static float             g_softwareDimCurrent = -1.0f;
 
 static io_connect_t          g_pmRoot     = MACH_PORT_NULL;
 static IONotificationPortRef g_pmPort     = NULL;
 static io_object_t           g_pmNotifier = MACH_PORT_NULL;
 
 static int  g_rebootstrapGen     = 0;
+static int  g_softwareDimGen     = 0;
 static bool g_softwareDimApplied = false;
 
 static float clampBrightness(float value) {
@@ -113,12 +118,83 @@ static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value) {
 }
 #endif
 
+static float softwareDimLevel(float brightness) {
+    return fmaxf(clampBrightness(brightness), MIN_SOFTWARE_BRIGHTNESS);
+}
+
 static void softwareDimBrightness(CGDirectDisplayID id, float brightness) {
-    float b = fmaxf(clampBrightness(brightness), MIN_SOFTWARE_BRIGHTNESS);
     CGSetDisplayTransferByFormula(id,
-        0.0f, b, 1.0f,
-        0.0f, b, 1.0f,
-        0.0f, b, 1.0f);
+        0.0f, brightness, 1.0f,
+        0.0f, brightness, 1.0f,
+        0.0f, brightness, 1.0f);
+}
+
+static bool setSoftwareDimBrightnessAll(float brightness) {
+    float b = softwareDimLevel(brightness);
+    bool applied = false;
+
+    for (int i = 0; i < g_extCount; i++) {
+        ExtDisplay d = g_externals[i];
+        if (d.mode != MODE_SOFTWARE_DIM) continue;
+
+        softwareDimBrightness(d.id, b);
+        applied = true;
+    }
+
+    if (applied) {
+        g_softwareDimApplied = true;
+        g_softwareDimCurrent = b;
+    }
+    return applied;
+}
+
+static void cancelSoftwareDimAnimation(void) {
+    g_softwareDimGen++;
+    if (g_softwareDimTimer) {
+        dispatch_source_cancel(g_softwareDimTimer);
+        g_softwareDimTimer = NULL;
+    }
+}
+
+static void applySoftwareDimBrightness(float brightness, bool animated) {
+    if (brightness < 0) return;
+
+    float target = softwareDimLevel(brightness);
+    float start = g_softwareDimCurrent >= 0 ? g_softwareDimCurrent : target;
+
+    cancelSoftwareDimAnimation();
+
+    if (!animated || fabsf(target - start) < BRIGHTNESS_EPSILON) {
+        setSoftwareDimBrightnessAll(target);
+        return;
+    }
+
+    int generation = g_softwareDimGen;
+    CFAbsoluteTime startedAt = CFAbsoluteTimeGetCurrent();
+    if (!setSoftwareDimBrightnessAll(start)) return;
+
+    g_softwareDimTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                dispatch_get_main_queue());
+    dispatch_source_set_timer(g_softwareDimTimer,
+                              dispatch_time(DISPATCH_TIME_NOW, 0),
+                              SOFTWARE_DIM_FRAME_INTERVAL_US * NSEC_PER_USEC,
+                              2 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(g_softwareDimTimer, ^{
+        if (generation != g_softwareDimGen) return;
+
+        double elapsed = CFAbsoluteTimeGetCurrent() - startedAt;
+        float t = (float)fmin(1.0, elapsed / SOFTWARE_DIM_ANIMATION_SECONDS);
+        float eased = t * t * (3.0f - 2.0f * t);
+        float value = start + (target - start) * eased;
+
+        setSoftwareDimBrightnessAll(value);
+
+        if (t >= 1.0f) {
+            cancelSoftwareDimAnimation();
+            setSoftwareDimBrightnessAll(target);
+        }
+    });
+    dispatch_resume(g_softwareDimTimer);
 }
 
 #if DDC_SUPPORTED
@@ -257,10 +333,10 @@ static void buildDisplayMap(void) {
     NSLog(@"ddc-mirror: builtin=%u, externals=%d", g_builtin, g_extCount);
 }
 
-static void flushBrightness(void) {
+static void flushHardwareBrightness(void) {
     if (g_pending < 0) return;
-    if (fabsf(g_pending - g_lastWritten) < BRIGHTNESS_EPSILON) return;
-    g_lastWritten = g_pending;
+    if (fabsf(g_pending - g_lastHardwareWritten) < BRIGHTNESS_EPSILON) return;
+    g_lastHardwareWritten = g_pending;
 
     float b = clampBrightness(g_pending);
     uint8_t ddcVal = ddcBrightness(b);
@@ -288,11 +364,6 @@ static void flushBrightness(void) {
                 break;
             }
             case MODE_SOFTWARE_DIM: {
-                CGDirectDisplayID id = d.id;
-                g_softwareDimApplied = true;
-                dispatch_async(g_writeQueue, ^{
-                    softwareDimBrightness(id, b);
-                });
                 break;
             }
         }
@@ -311,6 +382,7 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
     } else {
         g_pending = builtinBrightnessOrDefault(g_pending);
     }
+    applySoftwareDimBrightness(g_pending, true);
     dispatch_source_set_timer(g_debounce,
         dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC),
         DISPATCH_TIME_FOREVER,
@@ -319,8 +391,9 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
 
 static void syncNow(void) {
     g_pending = builtinBrightnessOrDefault(g_pending);
-    g_lastWritten = -1.0f;
-    flushBrightness();
+    g_lastHardwareWritten = -1.0f;
+    applySoftwareDimBrightness(g_pending, false);
+    flushHardwareBrightness();
 }
 
 static void rebootstrap(void) {
@@ -373,6 +446,7 @@ static void onSystemPower(void *refcon, io_service_t service,
 }
 
 static void quit(int code) {
+    cancelSoftwareDimAnimation();
     if (g_softwareDimApplied) {
         CGDisplayRestoreColorSyncSettings();
     }
@@ -418,7 +492,7 @@ int main(int argc, const char *argv[]) {
 
         g_debounce = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                             dispatch_get_main_queue());
-        dispatch_source_set_event_handler(g_debounce, ^{ flushBrightness(); });
+        dispatch_source_set_event_handler(g_debounce, ^{ flushHardwareBrightness(); });
         dispatch_source_set_timer(g_debounce, DISPATCH_TIME_FOREVER,
                                   DISPATCH_TIME_FOREVER, 0);
         dispatch_resume(g_debounce);
