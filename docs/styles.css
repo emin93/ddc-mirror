@@ -333,7 +333,7 @@ main {
   position: absolute;
   left: 5%;
   right: 5%;
-  bottom: 92px;
+  bottom: 120px;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18) 20%, rgba(255,255,255,0.22) 50%, rgba(255,255,255,0.18) 80%, transparent);
   z-index: 1;
