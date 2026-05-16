@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ddc-mirror — brightness, in sync.</title>
+  <meta name="description" content="A tiny macOS service that mirrors your built-in display brightness to external DDC/CI monitors. No UI, no telemetry, no pro tier." />
+  <meta name="theme-color" content="#0c0d10" />
+
+  <meta property="og:title" content="ddc-mirror" />
+  <meta property="og:description" content="Your external display, finally in sync with macOS brightness." />
+  <meta property="og:url" content="https://ddc-mirror.emin.ch" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <svg class="grain" aria-hidden="true">
+    <filter id="grainFilter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0"/>
+    </filter>
+    <rect width="100%" height="100%" filter="url(#grainFilter)"/>
+  </svg>
+
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="ddc-mirror home">
+      <span class="wordmark__dot" aria-hidden="true"></span>
+      <span class="wordmark__text">ddc-mirror</span>
+    </a>
+    <nav class="topbar__nav">
+      <a href="https://github.com/emin93/ddc-mirror">source</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="kicker">A tiny macOS service · v0.1</p>
+      <h1>Your external display,<br/><em>finally</em> in sync.</h1>
+      <p class="lede">
+        When macOS dims your MacBook — manually or via the ambient sensor —
+        <strong>ddc-mirror</strong> writes the same brightness to your external monitor over DDC/CI.
+        No menu bar. No hotkeys. No telemetry. Just brightness.
+      </p>
+
+      <div class="install">
+        <code id="install-cmd">brew install emin93/tap/ddc-mirror</code>
+        <button class="install__copy" type="button" data-copy="#install-cmd" aria-label="Copy install command">
+          <span data-copy-default>copy</span>
+          <span data-copy-done hidden>copied</span>
+        </button>
+      </div>
+
+      <p class="meta">macOS&nbsp;12+ · MIT · ~3&nbsp;MB binary · ~12&nbsp;MB resident · no&nbsp;UI · no&nbsp;telemetry</p>
+    </section>
+
+    <section class="stage" aria-label="Animated brightness sync demo">
+      <div class="stage__floor" aria-hidden="true"></div>
+
+      <article class="device device--mac" aria-label="Built-in MacBook display">
+        <div class="device__chip device__chip--mac">
+          <span class="device__chip-label">built-in</span>
+          <span class="device__chip-value" data-mac-pct>28%</span>
+        </div>
+        <div class="mac">
+          <div class="mac__lid">
+            <div class="mac__bezel">
+              <div class="mac__notch" aria-hidden="true">
+                <span class="mac__sensor" title="ambient light sensor"></span>
+                <span class="mac__camera"></span>
+              </div>
+              <div class="mac__screen">
+                <div class="wallpaper" aria-hidden="true"></div>
+                <div class="menubar" aria-hidden="true"></div>
+                <div class="dimmer" data-dimmer="builtin" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
+          <div class="mac__base" aria-hidden="true">
+            <div class="mac__hinge"></div>
+          </div>
+        </div>
+      </article>
+
+      <svg class="signal" viewBox="0 0 400 200" aria-hidden="true" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="sg" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stop-color="#f8d97c" stop-opacity="0"/>
+            <stop offset="0.5" stop-color="#f8d97c" stop-opacity="0.7"/>
+            <stop offset="1" stop-color="#f8d97c" stop-opacity="0"/>
+          </linearGradient>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <path id="signal-path" d="M 20 130 Q 200 -10 380 110" fill="none" stroke="url(#sg)" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round"/>
+        <circle r="4" fill="#fff4cf" filter="url(#glow)">
+          <animateMotion dur="2.6s" repeatCount="indefinite" rotate="auto">
+            <mpath href="#signal-path"/>
+          </animateMotion>
+        </circle>
+      </svg>
+
+      <article class="device device--ext" aria-label="External monitor">
+        <div class="device__chip device__chip--ext">
+          <span class="device__chip-label">external · DDC/CI</span>
+          <span class="device__chip-value" data-ext-pct>28%</span>
+        </div>
+        <div class="ext">
+          <div class="ext__bezel">
+            <div class="ext__screen">
+              <div class="wallpaper" aria-hidden="true"></div>
+              <div class="dimmer" data-dimmer="external" aria-hidden="true"></div>
+            </div>
+            <span class="ext__led" aria-hidden="true"></span>
+          </div>
+          <div class="ext__stand" aria-hidden="true"></div>
+          <div class="ext__foot" aria-hidden="true"></div>
+        </div>
+      </article>
+
+      <p class="stage__caption" aria-hidden="true">— made with graduated light —</p>
+    </section>
+
+    <section class="how">
+      <h2>How it works</h2>
+      <ol class="how__list">
+        <li>
+          <span class="how__step">01</span>
+          <h3>Watches built-in brightness</h3>
+          <p>Reads the same <code>DisplayServices</code> signal macOS uses for its own brightness HUD — including the ambient-light adjustments you don't think about.</p>
+        </li>
+        <li>
+          <span class="how__step">02</span>
+          <h3>Speaks DDC/CI over USB-C</h3>
+          <p>Hands the value to <code>m1ddc</code> on Apple Silicon (or <code>ddcctl</code> as a fallback) to write the matching brightness percentage to every DDC-capable monitor.</p>
+        </li>
+        <li>
+          <span class="how__step">03</span>
+          <h3>Runs as a brew service</h3>
+          <p>Installed once, started with <code>brew services</code>. Survives reboots. Costs about twelve megabytes of memory and nothing else.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="anti">
+      <h2>What it deliberately doesn't&nbsp;do</h2>
+      <ul class="anti__list">
+        <li><strong>No menu bar app.</strong> No preferences pane. No settings window. The only UI is the one Apple already shipped.</li>
+        <li><strong>No hotkey hijacking.</strong> Your brightness keys stay native. ddc-mirror only follows where macOS leads.</li>
+        <li><strong>No telemetry.</strong> No analytics, no update pings, no crash reporting. It can't tell anyone you installed it.</li>
+        <li><strong>No pro tier.</strong> MIT, free, forever. There is no paid version because there is no version to upgrade to.</li>
+      </ul>
+    </section>
+
+    <section class="quickstart">
+      <h2>Quickstart</h2>
+      <pre><code><span class="c-comment"># install &amp; run as a service</span>
+brew install emin93/tap/ddc-mirror
+brew services start ddc-mirror
+
+<span class="c-comment"># or dry-run, once, with output</span>
+ddc-mirror --backend print --once --verbose</code></pre>
+      <p class="quickstart__note">The eventual command is <code>brew install ddc-mirror</code> once it lands in homebrew-core. Until then, the personal tap above is the working incantation.</p>
+    </section>
+  </main>
+
+  <footer>
+    <span>MIT · <a href="https://github.com/emin93/ddc-mirror">github.com/emin93/ddc-mirror</a></span>
+    <span>by <a href="https://emin.ch">emin</a> · 2026</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
