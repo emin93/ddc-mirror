@@ -23,10 +23,51 @@
   // compositor layer (no layout/paint when it moves).
   let stageW = 0;
   let stageH = 0;
+
+  const macEl = document.querySelector('.mac');
+  const extBezelEl = document.querySelector('.ext__bezel');
+  const cableSvg = document.querySelector('.cable');
+  const cableBase = document.querySelector('.cable__base');
+  const cableHilite = document.querySelector('.cable__hilite');
+
+  function updateCable() {
+    if (!cableSvg || !macEl || !extBezelEl) return;
+    const sRect = stage.getBoundingClientRect();
+    const mRect = macEl.getBoundingClientRect();
+    const eRect = extBezelEl.getBoundingClientRect();
+
+    // start: emerges from the right side of the MacBook, near the base (where the ports sit)
+    const x1 = mRect.right - sRect.left - 4;
+    const y1 = mRect.bottom - sRect.top - 7;
+
+    // end: tucks into the back of the external monitor at the bezel's bottom-left
+    const x2 = eRect.left - sRect.left + 32;
+    const y2 = eRect.bottom - sRect.top - 6;
+
+    // sag: natural drape, scaled with span
+    const span = Math.max(40, x2 - x1);
+    const sag = Math.min(72, Math.max(32, span * 0.09));
+    const cp1x = x1 + span * 0.30;
+    const cp1y = Math.max(y1, y2) + sag;
+    const cp2x = x1 + span * 0.70;
+    const cp2y = Math.max(y1, y2) + sag;
+
+    const d =
+      'M ' + x1.toFixed(1) + ' ' + y1.toFixed(1) +
+      ' C ' + cp1x.toFixed(1) + ' ' + cp1y.toFixed(1) +
+      ', ' + cp2x.toFixed(1) + ' ' + cp2y.toFixed(1) +
+      ', ' + x2.toFixed(1) + ' ' + y2.toFixed(1);
+
+    cableBase.setAttribute('d', d);
+    cableHilite.setAttribute('d', d);
+    cableSvg.setAttribute('viewBox', '0 0 ' + sRect.width.toFixed(1) + ' ' + sRect.height.toFixed(1));
+  }
+
   function measure() {
     const r = stage.getBoundingClientRect();
     stageW = r.width;
     stageH = r.height;
+    updateCable();
   }
   measure();
   const ro = new ResizeObserver(measure);
