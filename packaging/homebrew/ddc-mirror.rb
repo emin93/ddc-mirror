@@ -7,7 +7,6 @@ class DdcMirror < Formula
   head "https://github.com/emin93/ddc-mirror.git", branch: "main"
 
   depends_on :macos
-  depends_on arch: :arm64
 
   def install
     system "make"

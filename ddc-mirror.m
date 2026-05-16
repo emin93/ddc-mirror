@@ -15,14 +15,22 @@
 #include <math.h>
 #include <unistd.h>
 
+#if defined(__arm64__)
+#define DDC_SUPPORTED 1
+#else
+#define DDC_SUPPORTED 0
+#endif
+
 typedef CFTypeRef IOAVServiceRef;
 
+#if DDC_SUPPORTED
 extern IOAVServiceRef IOAVServiceCreateWithService(CFAllocatorRef allocator, io_service_t service);
 extern IOReturn       IOAVServiceWriteI2C(IOAVServiceRef service,
                                           uint32_t chipAddress,
                                           uint32_t dataAddress,
                                           void *inputBuffer,
                                           uint32_t inputBufferSize);
+#endif
 
 extern int  DisplayServicesGetBrightness(CGDirectDisplayID display, float *brightness);
 extern int  DisplayServicesSetBrightness(CGDirectDisplayID display, float brightness);
@@ -81,6 +89,7 @@ static uint8_t ddcBrightness(float value) {
     return (uint8_t)(clampBrightness(value) * 100.0f + 0.5f);
 }
 
+#if DDC_SUPPORTED
 static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value) {
     uint8_t pkt[6] = {0};
     pkt[0] = 0x84;
@@ -97,6 +106,12 @@ static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value) {
     }
     return last;
 }
+#else
+static IOReturn ddcWriteBrightness(IOAVServiceRef av, uint8_t value) {
+    (void)av; (void)value;
+    return kIOReturnUnsupported;
+}
+#endif
 
 static void softwareDimBrightness(CGDirectDisplayID id, float brightness) {
     float b = fmaxf(clampBrightness(brightness), MIN_SOFTWARE_BRIGHTNESS);
@@ -106,6 +121,7 @@ static void softwareDimBrightness(CGDirectDisplayID id, float brightness) {
         0.0f, b, 1.0f);
 }
 
+#if DDC_SUPPORTED
 static bool isExternalAVService(io_service_t service) {
     io_name_t name;
     if (IORegistryEntryGetName(service, name) != KERN_SUCCESS ||
@@ -162,6 +178,12 @@ static IOAVServiceRef avServiceForDisplay(CGDirectDisplayID displayID) {
     IOObjectRelease(display);
     return found;
 }
+#else
+static IOAVServiceRef avServiceForDisplay(CGDirectDisplayID displayID) {
+    (void)displayID;
+    return NULL;
+}
+#endif
 
 static void releaseDisplayMap(void) {
     for (int i = 0; i < g_extCount; i++) {
@@ -374,8 +396,8 @@ static void printUsage(void) {
           "Mirrors the built-in MacBook display's brightness to all connected\n"
           "external displays. Per display, picks one of:\n"
           "  - Apple-native API (Studio Display, Pro Display XDR)\n"
-          "  - DDC/CI VCP 0x10 (most monitors on direct cables)\n"
-          "  - Software gamma dim (monitors behind docks/hubs that strip DDC)\n"
+          "  - DDC/CI VCP 0x10 (Apple Silicon, monitors on direct cables)\n"
+          "  - Software gamma dim (Intel, or monitors behind docks/hubs)\n"
           "No flags, no config.\n", stdout);
 }
 
@@ -387,11 +409,6 @@ int main(int argc, const char *argv[]) {
                 return 0;
             }
         }
-
-#if !defined(__arm64__)
-        fputs("ddc-mirror: Apple Silicon required.\n", stderr);
-        return 1;
-#endif
 
         watchSignal(SIGTERM, 0);
         watchSignal(SIGINT,  1);
