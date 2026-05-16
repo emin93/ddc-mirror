@@ -20,6 +20,20 @@ class DdcMirror < Formula
     error_log_path var/"log/ddc-mirror.log"
   end
 
+  def caveats
+    <<~EOS
+      ✨  ddc-mirror is installed.
+
+      Start syncing now (and on every login):
+        brew services start ddc-mirror
+
+      Or run it once in the foreground:
+        ddc-mirror
+
+      That's it. There is no step two.
+    EOS
+  end
+
   test do
     assert_match "Usage: ddc-mirror", shell_output("#{bin}/ddc-mirror --help")
   end
