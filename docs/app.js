@@ -9,7 +9,7 @@
   const PERIOD_MS = 28000;
 
   const FLOOR = 0.06;
-  const SUN_AMP = 0.92;
+  const SUN_AMP = 0.94;
 
   // bell curve with wrap-around — used for crossfading sky layers
   function bell(phase, center, halfWidth) {
@@ -78,8 +78,11 @@
   let onScreen = true;
   let lastPctText = -1;
 
+  // start the loop just before dawn so the sun begins rising within ~1s of load
+  const START_PHASE = 0.22;
+
   function update(now) {
-    if (startTime === null) startTime = now;
+    if (startTime === null) startTime = now - START_PHASE * PERIOD_MS;
     const phase = (((now - startTime) / PERIOD_MS) % 1 + 1) % 1;
 
     // sun arc — visible during phase 0.25..0.75
@@ -90,7 +93,7 @@
     const sunY = sunArc;
 
     // brightness — both screens share the same value, parallel
-    const brightness = Math.min(0.98, FLOOR + sunArc * SUN_AMP);
+    const brightness = Math.min(1, FLOOR + sunArc * SUN_AMP);
 
     // sky crossfade amounts (cheap — only opacity, GPU composite)
     const dayAmount = bell(phase, 0.5, 0.30);
