@@ -87,6 +87,9 @@ static float             g_externalBrightnessOffset = 0.0f;
 static io_connect_t          g_pmRoot     = MACH_PORT_NULL;
 static IONotificationPortRef g_pmPort     = NULL;
 static io_object_t           g_pmNotifier = MACH_PORT_NULL;
+static IONotificationPortRef g_avServicePort = NULL;
+static io_iterator_t         g_avServiceMatched = MACH_PORT_NULL;
+static io_iterator_t         g_avServiceTerminated = MACH_PORT_NULL;
 
 static int  g_rebootstrapGen     = 0;
 static int  g_softwareDimGen     = 0;
@@ -534,24 +537,94 @@ static void rebootstrap(void) {
     syncNow();
 }
 
-static void scheduleRebootstrap(double delaySeconds) {
-    int my = ++g_rebootstrapGen;
+static void scheduleRebootstrapAttempt(double delaySeconds, int generation) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delaySeconds * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        if (my != g_rebootstrapGen) return;
+        if (generation != g_rebootstrapGen) return;
         rebootstrap();
     });
+}
+
+static void scheduleRebootstrap(double delaySeconds) {
+    scheduleRebootstrapAttempt(delaySeconds, ++g_rebootstrapGen);
+}
+
+static void scheduleHotplugRebootstrap(void) {
+    int generation = ++g_rebootstrapGen;
+    scheduleRebootstrapAttempt(1.0, generation);
+    scheduleRebootstrapAttempt(4.0, generation);
+    scheduleRebootstrapAttempt(8.0, generation);
 }
 
 static void onDisplayReconfigured(CGDirectDisplayID display,
                                   CGDisplayChangeSummaryFlags flags,
                                   void *userInfo) {
     if (flags & kCGDisplayBeginConfigurationFlag) return;
-    if ((flags & (kCGDisplayAddFlag | kCGDisplayRemoveFlag |
-                  kCGDisplaySetMainFlag | kCGDisplayDesktopShapeChangedFlag)) == 0) {
+
+    CGDisplayChangeSummaryFlags relevant =
+        kCGDisplayAddFlag |
+        kCGDisplayRemoveFlag |
+        kCGDisplayEnabledFlag |
+        kCGDisplayDisabledFlag |
+        kCGDisplaySetMainFlag |
+        kCGDisplaySetModeFlag |
+        kCGDisplayMirrorFlag |
+        kCGDisplayUnMirrorFlag |
+        kCGDisplayDesktopShapeChangedFlag;
+    if ((flags & relevant) == 0) {
         return;
     }
-    scheduleRebootstrap(1.0);
+    scheduleHotplugRebootstrap();
+}
+
+static void drainDisplayIterator(io_iterator_t iterator) {
+    io_object_t object;
+    while ((object = IOIteratorNext(iterator)) != MACH_PORT_NULL) {
+        IOObjectRelease(object);
+    }
+}
+
+static void onAVServiceChanged(void *refcon, io_iterator_t iterator) {
+    (void)refcon;
+    drainDisplayIterator(iterator);
+    scheduleHotplugRebootstrap();
+}
+
+static bool addAVServiceNotification(const char *notificationType,
+                                     io_iterator_t *iterator) {
+    CFMutableDictionaryRef matching = IOServiceMatching("DCPAVServiceProxy");
+    if (!matching) return false;
+
+    kern_return_t r = IOServiceAddMatchingNotification(g_avServicePort,
+                                                       notificationType,
+                                                       matching,
+                                                       onAVServiceChanged,
+                                                       NULL,
+                                                       iterator);
+    if (r != KERN_SUCCESS) return false;
+
+    drainDisplayIterator(*iterator);
+    return true;
+}
+
+static void startAVServiceNotifications(void) {
+    g_avServicePort = IONotificationPortCreate(kIOMainPortDefault);
+    if (!g_avServicePort) {
+        NSLog(@"ddc-mirror: failed to create AV service notification port");
+        return;
+    }
+
+    CFRunLoopAddSource(CFRunLoopGetMain(),
+                       IONotificationPortGetRunLoopSource(g_avServicePort),
+                       kCFRunLoopDefaultMode);
+
+    bool matched = addAVServiceNotification(kIOFirstMatchNotification,
+                                            &g_avServiceMatched);
+    bool terminated = addAVServiceNotification(kIOTerminatedNotification,
+                                               &g_avServiceTerminated);
+    if (!matched || !terminated) {
+        NSLog(@"ddc-mirror: failed to register AV service notifications");
+    }
 }
 
 static void onSystemPower(void *refcon, io_service_t service,
@@ -571,6 +644,18 @@ static void onSystemPower(void *refcon, io_service_t service,
 
 static void quit(int code) {
     cancelSoftwareDimAnimation();
+    if (g_avServiceMatched != MACH_PORT_NULL) {
+        IOObjectRelease(g_avServiceMatched);
+        g_avServiceMatched = MACH_PORT_NULL;
+    }
+    if (g_avServiceTerminated != MACH_PORT_NULL) {
+        IOObjectRelease(g_avServiceTerminated);
+        g_avServiceTerminated = MACH_PORT_NULL;
+    }
+    if (g_avServicePort) {
+        IONotificationPortDestroy(g_avServicePort);
+        g_avServicePort = NULL;
+    }
     restoreSoftwareDimIfApplied();
     releaseDisplayMap();
     exit(code);
@@ -636,6 +721,7 @@ int main(int argc, const char *argv[]) {
         }
 
         CGDisplayRegisterReconfigurationCallback(onDisplayReconfigured, NULL);
+        startAVServiceNotifications();
 
         g_pmRoot = IORegisterForSystemPower(NULL, &g_pmPort, onSystemPower, &g_pmNotifier);
         if (g_pmRoot != MACH_PORT_NULL && g_pmPort != NULL) {
