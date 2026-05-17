@@ -31,6 +31,20 @@ brew services start ddc-mirror
 
 That's it. There is no step two.
 
+### Optional calibration
+
+If an external monitor looks consistently darker or brighter than the MacBook
+display, add a small offset for external displays:
+
+```sh
+defaults write ch.emin.ddc-mirror externalBrightnessOffset -float 0.10
+brew services restart ddc-mirror
+```
+
+`0.10` means +10 brightness points, so MacBook 50% maps to external 60%.
+Negative values work too, and the final brightness is always clamped between 0%
+and 100%.
+
 ## 💡 Why you'll like it
 
 - 🔌 **Plug-and-sync.** Connect a new monitor and it gets picked up on the next tick. Unplug one and it's gone. No restart, no config.

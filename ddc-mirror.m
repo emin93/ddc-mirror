@@ -82,6 +82,7 @@ static dispatch_source_t g_signalSources[3];
 static float             g_pending     = -1.0f;
 static float             g_lastHardwareWritten = -1.0f;
 static float             g_softwareDimCurrent = -1.0f;
+static float             g_externalBrightnessOffset = 0.0f;
 
 static io_connect_t          g_pmRoot     = MACH_PORT_NULL;
 static IONotificationPortRef g_pmPort     = NULL;
@@ -91,10 +92,44 @@ static int  g_rebootstrapGen     = 0;
 static int  g_softwareDimGen     = 0;
 static bool g_softwareDimApplied = false;
 
+#define PREFERENCES_DOMAIN CFSTR("ch.emin.ddc-mirror")
+#define EXTERNAL_BRIGHTNESS_OFFSET_KEY CFSTR("externalBrightnessOffset")
+
 static float clampBrightness(float value) {
     if (value < 0.0f) return 0.0f;
     if (value > 1.0f) return 1.0f;
     return value;
+}
+
+static float externalBrightness(float builtinBrightness) {
+    return clampBrightness(builtinBrightness + g_externalBrightnessOffset);
+}
+
+static void loadPreferences(void) {
+    g_externalBrightnessOffset = 0.0f;
+
+    CFPropertyListRef offsetValue =
+        CFPreferencesCopyAppValue(EXTERNAL_BRIGHTNESS_OFFSET_KEY, PREFERENCES_DOMAIN);
+    if (!offsetValue) return;
+
+    if (CFGetTypeID(offsetValue) == CFNumberGetTypeID()) {
+        double offset = 0.0;
+        if (CFNumberGetValue((CFNumberRef)offsetValue, kCFNumberDoubleType, &offset) &&
+            isfinite(offset)) {
+            if (offset < -1.0) offset = -1.0;
+            if (offset > 1.0) offset = 1.0;
+            g_externalBrightnessOffset = (float)offset;
+        }
+    } else {
+        NSLog(@"ddc-mirror: ignoring non-numeric externalBrightnessOffset preference");
+    }
+
+    CFRelease(offsetValue);
+
+    if (fabsf(g_externalBrightnessOffset) >= BRIGHTNESS_EPSILON) {
+        NSLog(@"ddc-mirror: external brightness offset %.0f points",
+              g_externalBrightnessOffset * 100.0f);
+    }
 }
 
 static uint8_t ddcBrightness(float value) {
@@ -393,7 +428,7 @@ static void buildDisplayMap(void) {
         }
     }
 
-    uint8_t probeBrightness = ddcBrightness(builtinBrightnessOrDefault(0.5f));
+    uint8_t probeBrightness = ddcBrightness(externalBrightness(builtinBrightnessOrDefault(0.5f)));
     for (uint32_t i = 0; i < count; i++) {
         CGDirectDisplayID id = ids[i];
         if (CGDisplayIsBuiltin(id)) continue;
@@ -422,10 +457,11 @@ static void buildDisplayMap(void) {
 
 static void flushHardwareBrightness(void) {
     if (g_pending < 0) return;
-    if (fabsf(g_pending - g_lastHardwareWritten) < BRIGHTNESS_EPSILON) return;
-    g_lastHardwareWritten = g_pending;
 
-    float b = clampBrightness(g_pending);
+    float b = externalBrightness(g_pending);
+    if (fabsf(b - g_lastHardwareWritten) < BRIGHTNESS_EPSILON) return;
+    g_lastHardwareWritten = b;
+
     uint8_t ddcVal = ddcBrightness(b);
 
     for (int i = 0; i < g_extCount; i++) {
@@ -469,7 +505,7 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
     } else {
         g_pending = builtinBrightnessOrDefault(g_pending);
     }
-    applySoftwareDimBrightness(g_pending, true);
+    applySoftwareDimBrightness(externalBrightness(g_pending), true);
     dispatch_source_set_timer(g_debounce,
         dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC),
         DISPATCH_TIME_FOREVER,
@@ -479,7 +515,7 @@ static void onBrightnessChanged(CFNotificationCenterRef center,
 static void syncNow(void) {
     g_pending = builtinBrightnessOrDefault(g_pending);
     g_lastHardwareWritten = -1.0f;
-    applySoftwareDimBrightness(g_pending, false);
+    applySoftwareDimBrightness(externalBrightness(g_pending), false);
     flushHardwareBrightness();
 }
 
@@ -487,6 +523,7 @@ static void rebootstrap(void) {
     if (g_builtin) {
         DisplayServicesUnregisterForBrightnessChangeNotifications(g_builtin, g_builtin);
     }
+    loadPreferences();
     buildDisplayMap();
     if (g_builtin == 0) {
         NSLog(@"ddc-mirror: no built-in display — idling");
@@ -557,7 +594,10 @@ static void printUsage(void) {
           "  - Apple-native API (Studio Display, Pro Display XDR)\n"
           "  - DDC/CI VCP 0x10 (Apple Silicon, monitors on direct cables)\n"
           "  - Profile-aware software dim (Intel, or monitors behind docks/hubs)\n"
-          "No flags, no config.\n", stdout);
+          "\n"
+          "Optional calibration:\n"
+          "  defaults write ch.emin.ddc-mirror externalBrightnessOffset -float 0.10\n"
+          "Use 0.10 for +10 brightness points. Values are clamped to 0.0-1.0.\n", stdout);
 }
 
 int main(int argc, const char *argv[]) {
@@ -582,6 +622,7 @@ int main(int argc, const char *argv[]) {
                                   DISPATCH_TIME_FOREVER, 0);
         dispatch_resume(g_debounce);
 
+        loadPreferences();
         buildDisplayMap();
         if (g_builtin == 0) {
             NSLog(@"ddc-mirror: no built-in display detected — exiting");
